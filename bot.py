@@ -187,8 +187,8 @@ Devuelve ÚNICAMENTE el texto final formateado listo para copiar en el sistema d
 
     try:
         response = ai_client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
+        model='gemini-3.6-flash',
+        contents=prompt,
         )
         resultado_ia = response.text.strip()
     except Exception as e:
