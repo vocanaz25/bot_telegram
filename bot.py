@@ -2,6 +2,8 @@ import os
 import sys
 import logging
 import html
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -14,27 +16,49 @@ from telegram.ext import (
 )
 from google import genai
 
-# Configuración de Logs
+# ==============================================================================
+# SERVIDOR HTTP EN SEGUNDO PLANO (Evita que Render entre en modo Sleep)
+# ==============================================================================
+class SimpleHealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"Bot activo 24/7 - Generador de comentarios con IA")
+
+    def log_message(self, format, *args):
+        # Silenciar logs http para mantener limpios los registros de Telegram
+        return
+
+def run_http_server():
+    # Render asigna dinamicamente la variable PORT (usualmente 10000 o 8080)
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), SimpleHealthCheckHandler)
+    server.serve_forever()
+
+# ==============================================================================
+# CONFIGURACIÓN DE LOGS Y CREDENCIALES
+# ==============================================================================
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# ==========================================
-# CREDENCIALES (Leídas directo desde Render)
-# ==========================================
+# Lectura segura desde las variables de entorno de Render
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
-    logger.critical("Error: Faltan las variables de entorno TELEGRAM_TOKEN o GEMINI_API_KEY.")
+    logger.critical("Error critico: Faltan las variables de entorno TELEGRAM_TOKEN o GEMINI_API_KEY en Render.")
     sys.exit(1)
 
-# Inicializar cliente Gemini
+# Inicializar cliente Gemini con SDK oficial
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Estados de la conversación
+# ==============================================================================
+# ESTADOS DEL FLUJO CONVERSACIONAL
+# ==============================================================================
 (
     SOLICITAR_SR,
     SOLICITAR_CLIENTE,
@@ -47,8 +71,12 @@ ai_client = genai.Client(api_key=GEMINI_API_KEY)
 ) = range(8)
 
 def safe_html(text: str) -> str:
+    """Escapa caracteres especiales para evitar errores de parseo en Telegram HTML."""
     return html.escape(str(text or "N/A"))
 
+# ==============================================================================
+# CONTROLADORES DE MENSAJES Y PASOS
+# ==============================================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     mensaje = (
@@ -99,10 +127,16 @@ async def seleccionar_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     context.user_data['tipo'] = tipo
     
     if tipo == "cierre":
-        await query.edit_message_text("Has seleccionado: <b>Cierre</b>\n\nPor favor, ingresa el <b>Detalle del trabajo realizado</b>:", parse_mode="HTML")
+        await query.edit_message_text(
+            "Has seleccionado: <b>Cierre</b>\n\nPor favor, ingresa el <b>Detalle del trabajo realizado</b>:", 
+            parse_mode="HTML"
+        )
         return SOLICITAR_DETALLE
     else:
-        await query.edit_message_text("Has seleccionado: <b>Suspensión</b>\n\nPor favor, ingresa el <b>Número de Parte</b>:", parse_mode="HTML")
+        await query.edit_message_text(
+            "Has seleccionado: <b>Suspensión</b>\n\nPor favor, ingresa el <b>Número de Parte</b>:", 
+            parse_mode="HTML"
+        )
         return SOLICITAR_NUMERO_PARTE
 
 async def recibir_numero_parte(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -167,7 +201,7 @@ Devuelve ÚNICAMENTE el texto estructurado listo para pegar en el sistema de tic
         )
         resultado_ia = response.text.strip()
     except Exception as e:
-        resultado_ia = f"Error al procesar: {e}\n\nDetalle original: {detalle}"
+        resultado_ia = f"Error al procesar con IA: {e}\n\nDetalle original: {detalle}"
 
     mensaje_final = (
         "✅ <b>Comentario técnico generado exitosamente:</b>\n\n"
@@ -182,7 +216,15 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Proceso cancelado. Envía /start para comenzar de nuevo.")
     return ConversationHandler.END
 
+# ==============================================================================
+# PUNTO DE ENTRADA PRINCIPAL
+# ==============================================================================
 if __name__ == '__main__':
+    # 1. Iniciar el servidor HTTP en un hilo independiente para responder a los pings de Render / UptimeRobot
+    server_thread = threading.Thread(target=run_http_server, daemon=True)
+    server_thread.start()
+
+    # 2. Iniciar la aplicación de Telegram
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     conv_handler = ConversationHandler(
@@ -201,5 +243,5 @@ if __name__ == '__main__':
     )
 
     app.add_handler(conv_handler)
-    print("🤖 Generador de comentarios con IA BOT (Por Víctor Ocaña) iniciado...")
+    print("🤖 Generador de comentarios con IA BOT iniciado...")
     app.run_polling(drop_pending_updates=True)
