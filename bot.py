@@ -162,7 +162,6 @@ async def recibir_detalle_y_generar(update: Update, context: ContextTypes.DEFAUL
     detalle = context.user_data.get('detalle', '')
     numero_parte = context.user_data.get('numero_parte', '')
 
-    # Configuración de prompt dinámico y natural
     if subtipo == "cierre":
         instrucciones_tipo = (
             "Caso: CIERRE.\n"
@@ -216,7 +215,7 @@ Reglas:
 
     try:
         response = ai_client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3.1-flash',
             contents=prompt,
         )
         resultado_ia = response.text.strip()
