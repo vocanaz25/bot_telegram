@@ -27,7 +27,7 @@ class SimpleHealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot activo 24/7 - Generador de comentarios con IA")
 
     def log_message(self, format, *args):
-        return  # Silenciar logs HTTP en consola
+        return
 
 def run_http_server():
     port = int(os.environ.get("PORT", 8080))
@@ -50,7 +50,6 @@ if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
     logger.critical("Faltan variables de entorno: Define TELEGRAM_TOKEN y GEMINI_API_KEY en Render.")
     sys.exit(1)
 
-# Inicializar cliente de Gemini
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ==============================================================================
@@ -62,11 +61,14 @@ ai_client = genai.Client(api_key=GEMINI_API_KEY)
     SOLICITAR_MODELO,
     SOLICITAR_SERIE,
     SOLICITAR_PERSONA_VALIDA,
+    SOLICITAR_MEDICION_FN,
+    SOLICITAR_MEDICION_FT,
+    SOLICITAR_MEDICION_NT,
     SELECCIONAR_TIPO,
     SELECCIONAR_SUBTIPO_SUSPENSION,
     SOLICITAR_NUMERO_PARTE,
     SOLICITAR_DETALLE
-) = range(9)
+) = range(12)
 
 def safe_html(text: str) -> str:
     return html.escape(str(text or "N/A"))
@@ -75,16 +77,13 @@ def safe_html(text: str) -> str:
 # CONTROLADORES DE MENSAJES Y PASOS
 # ==============================================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Inicio del bot y bienvenida."""
     context.user_data.clear()
-    
     mensaje_bienvenida = (
         "🤖 <b>Generador de comentarios con IA BOT</b>\n"
         "👨‍💻 <b>Creado por Víctor Ocaña</b>\n\n"
         "Vamos a generar el comentario técnico para tu atención.\n\n"
         "Por favor, ingresa el número de <b>SR</b> (Service Request / Incidencia):"
     )
-    
     await update.message.reply_text(mensaje_bienvenida, parse_mode="HTML")
     return SOLICITAR_SR
 
@@ -110,7 +109,21 @@ async def recibir_serie(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 async def recibir_persona_valida(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['persona_valida'] = update.message.text.strip()
-    
+    await update.message.reply_text("⚡ <b>Medición Eléctrica:</b>\nIngresa el valor de <b>Fase + Neutro (F + N)</b>:", parse_mode="HTML")
+    return SOLICITAR_MEDICION_FN
+
+async def recibir_medicion_fn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data['medicion_fn'] = update.message.text.strip()
+    await update.message.reply_text("⚡ <b>Medición Eléctrica:</b>\nIngresa el valor de <b>Fase + Tierra (F + T)</b>:", parse_mode="HTML")
+    return SOLICITAR_MEDICION_FT
+
+async def recibir_medicion_ft(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data['medicion_ft'] = update.message.text.strip()
+    await update.message.reply_text("⚡ <b>Medición Eléctrica:</b>\nIngresa el valor de <b>Neutro + Tierra (N + T)</b>:", parse_mode="HTML")
+    return SOLICITAR_MEDICION_NT
+
+async def recibir_medicion_nt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data['medicion_nt'] = update.message.text.strip()
     keyboard = [
         [
             InlineKeyboardButton("□ Cierre", callback_data="cierre"),
@@ -118,7 +131,6 @@ async def recibir_persona_valida(update: Update, context: ContextTypes.DEFAULT_T
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
     await update.message.reply_text("Selecciona el <b>Tipo de Comentario</b>:", reply_markup=reply_markup, parse_mode="HTML")
     return SELECCIONAR_TIPO
 
@@ -158,7 +170,7 @@ async def seleccionar_subtipo_suspension(update: Update, context: ContextTypes.D
         await query.edit_message_text("Has seleccionado: <b>PN (Garantía)</b>\n\nPor favor, ingresa el <b>Número de Parte (PN)</b>:", parse_mode="HTML")
         return SOLICITAR_NUMERO_PARTE
 
-    else:  # susp_reprog
+    else:
         context.user_data['tipo'] = "Suspensión (Reprogramación)"
         await query.edit_message_text("Has seleccionado: <b>Reprogramación</b>\n\nIngresa el <b>Motivo o detalle de la reprogramación solicitada por el cliente</b>:", parse_mode="HTML")
         return SOLICITAR_DETALLE
@@ -178,6 +190,9 @@ async def recibir_detalle_y_generar(update: Update, context: ContextTypes.DEFAUL
     modelo = context.user_data.get('modelo', 'N/A')
     serie = context.user_data.get('serie', 'N/A')
     persona_valida = context.user_data.get('persona_valida', 'N/A')
+    fn = context.user_data.get('medicion_fn', 'N/A')
+    ft = context.user_data.get('medicion_ft', 'N/A')
+    nt = context.user_data.get('medicion_nt', 'N/A')
     tipo = context.user_data.get('tipo', 'Cierre')
     subtipo = context.user_data.get('subtipo', 'cierre')
     detalle = context.user_data.get('detalle', '')
@@ -201,7 +216,7 @@ async def recibir_detalle_y_generar(update: Update, context: ContextTypes.DEFAUL
             "Redacta la falla encontrada, menciona el PN requerido y especifica que la "
             "atención queda suspendida a la espera de recepción del repuesto solicitado por garantía."
         )
-    else:  # susp_reprog
+    else:
         instrucciones_tipo = (
             "Caso: SUSPENSIÓN (Reprogramación por cliente).\n"
             "Redacta que se asistió o coordinó la atención, explica de forma breve y clara el motivo "
@@ -218,6 +233,10 @@ Cliente: {cliente}
 Modelo de Equipo: {modelo}
 Serie: {serie}
 Persona que valida: {persona_valida}
+Mediciones Eléctricas:
+- F + N: {fn}
+- F + T: {ft}
+- N + T: {nt}
 Tipo de Comentario: {tipo}
 
 Detalle de trabajo:
@@ -234,7 +253,6 @@ Reglas:
 - Mantén la redacción en primera o tercera persona profesional típica de campo (ej: "Se revisa equipo...", "Se detecta falla en...", "Se coordina con...").
 """
 
-    # Lista de modelos con fallback automático
     modelos_a_probar = [
         'gemini-2.0-flash',
         'gemini-1.5-flash',
@@ -273,7 +291,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 if __name__ == '__main__':
-    # Servidor HTTP para Render / UptimeRobot
     server_thread = threading.Thread(target=run_http_server, daemon=True)
     server_thread.start()
 
@@ -287,6 +304,9 @@ if __name__ == '__main__':
             SOLICITAR_MODELO: [MessageHandler(filters.TEXT & ~filters.COMMAND, recibir_modelo)],
             SOLICITAR_SERIE: [MessageHandler(filters.TEXT & ~filters.COMMAND, recibir_serie)],
             SOLICITAR_PERSONA_VALIDA: [MessageHandler(filters.TEXT & ~filters.COMMAND, recibir_persona_valida)],
+            SOLICITAR_MEDICION_FN: [MessageHandler(filters.TEXT & ~filters.COMMAND, recibir_medicion_fn)],
+            SOLICITAR_MEDICION_FT: [MessageHandler(filters.TEXT & ~filters.COMMAND, recibir_medicion_ft)],
+            SOLICITAR_MEDICION_NT: [MessageHandler(filters.TEXT & ~filters.COMMAND, recibir_medicion_nt)],
             SELECCIONAR_TIPO: [CallbackQueryHandler(seleccionar_tipo)],
             SELECCIONAR_SUBTIPO_SUSPENSION: [CallbackQueryHandler(seleccionar_subtipo_suspension)],
             SOLICITAR_NUMERO_PARTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, recibir_numero_parte)],
