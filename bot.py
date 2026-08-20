@@ -27,7 +27,7 @@ class SimpleHealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot activo 24/7 - Generador de comentarios con IA")
 
     def log_message(self, format, *args):
-        return  # Silenciar logs http en consola
+        return  # Silenciar logs HTTP en consola
 
 def run_http_server():
     port = int(os.environ.get("PORT", 8080))
@@ -234,14 +234,30 @@ Reglas:
 - Mantén la redacción en primera o tercera persona profesional típica de campo (ej: "Se revisa equipo...", "Se detecta falla en...", "Se coordina con...").
 """
 
-    try:
-        response = ai_client.models.generate_content(
-            model='gemini-3.6-flash',
-            contents=prompt,
-        )
-        resultado_ia = response.text.strip()
-    except Exception as e:
-        resultado_ia = f"Error al consultar la IA: {e}\n\nDetalle original: {detalle}"
+    # Lista de modelos con fallback automático
+    modelos_a_probar = [
+        'gemini-2.0-flash',
+        'gemini-1.5-flash',
+        'gemini-3.6-flash'
+    ]
+    
+    resultado_ia = None
+    ultimo_error = None
+
+    for model_name in modelos_a_probar:
+        try:
+            response = ai_client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+            )
+            resultado_ia = response.text.strip()
+            break
+        except Exception as e:
+            ultimo_error = e
+            continue
+
+    if not resultado_ia:
+        resultado_ia = f"Error al consultar la IA ({ultimo_error})\n\nDetalle original: {detalle}"
 
     mensaje_final = (
         "✅ <b>Comentario técnico generado:</b>\n\n"
@@ -257,7 +273,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 if __name__ == '__main__':
-    # Iniciar servidor HTTP en segundo plano para Render y UptimeRobot
+    # Servidor HTTP para Render / UptimeRobot
     server_thread = threading.Thread(target=run_http_server, daemon=True)
     server_thread.start()
 
